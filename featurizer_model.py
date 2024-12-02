@@ -121,3 +121,19 @@ class FeaturizerModel(nn.Module):
         x = x.view(x.size(0), -1)
         # x = self.decoder(x)
         return x
+
+class FeaturizerModelPolicy(nn.Module):
+    def __init__(self):
+        super(FeaturizerModelPolicy, self).__init__()
+        self.encoder = FeaturizerModel().encoder
+        self.policy_head = nn.Sequential(
+            nn.Linear(512,128),
+            nn.ReLU(),
+            nn.Linear(128, 10),
+            nn.Softmax(dim=1)
+        )
+    def forward(self, x):
+        features = self.encoder(x)
+        features = features.view(features.size(0), -1)
+        policy = self.policy_head(features)
+        return policy

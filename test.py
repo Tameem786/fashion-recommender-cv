@@ -1,16 +1,17 @@
 import pandas as pd
 import os
 from PIL import Image
+from tqdm import tqdm
+import json
 
 from sklearn.preprocessing import LabelEncoder
 
 import torch
 import torch.nn as nn
-from torch.cuda import device
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 
-from featurizer_model import FeaturizerModel
+from featurizer_model import FeaturizerModel, FeaturizerModelPolicy
 
 
 class FashionDataset(Dataset):
@@ -90,44 +91,92 @@ def collate_fn(batch):
 img_folder = './index_images/'
 # Load TSV data
 data = pd.read_csv('./datasets/raw_train.tsv', sep=' ', engine='python')
+data = data[:10000] # Using 10,000 For Training
 
 dataset = FashionDataset(data, img_folder, transform)
 dataloader = DataLoader(
     dataset,
     batch_size=32,
-    shuffle=True,
     collate_fn=collate_fn
 )
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Program started on {device} ...")
 
-model = FeaturizerModel().to(device)
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+# model = FeaturizerModel().to(device)
+model = FeaturizerModelPolicy().to(device)
+# criterion = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
-for epoch in range(10):
-    model.train()
-    running_loss = 0.0
+losses = []
+total_rewards = []
 
+for epoch in range(100):
+    rewards = []
+    # log_probs = []
+    epoch_rewards = []
     for batch in dataloader:
-        print(f"Epoch: {epoch} is running...")
         images, labels = batch
-
         if len(images) == 0:
             continue
-
         images = torch.stack(images).to(device)
         labels = LabelEncoder().fit_transform(labels)
         labels = torch.tensor(labels).to(device)
 
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        probs = model(images)
+        dist = torch.distributions.Categorical(probs)
+        actions = dist.sample()
+        log_probs = dist.log_prob(actions)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        reward = torch.tensor([1.0 if a==1 else -1.0 for a, l in zip(actions, labels)])
+        rewards.append(reward)
+        # log_probs.append(log_probs)
+        epoch_rewards.append(reward.mean().item())
 
-        running_loss += loss.item()
+    rewards = torch.cat(rewards)
+    log_probs = torch.cat(log_probs)
+    loss = -(log_probs*rewards).mean()
+    losses.append(loss.item())
+    total_rewards.append(sum(epoch_rewards)/len(epoch_rewards))
 
-    avg_loss = running_loss / len(dataloader)
-    print(f'Epoch [{epoch + 1}/{10}], Loss: {avg_loss:.4f}')
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    print(f'Epoch[{epoch+1}/100], Loss: {loss.item():.4f}, Avg Reward: {sum(epoch_rewards)/len(epoch_rewards):.4f}')
+#
+# for epoch in range(100):
+#     model.train()
+#     running_loss = 0.0
+#     # print(f"Epoch {epoch} is running ...")
+#
+#     for batch in dataloader:
+#         images, labels = batch
+#
+#         if len(images) == 0:
+#             continue
+#
+#         images = torch.stack(images).to(device)
+#         labels = LabelEncoder().fit_transform(labels)
+#         labels = torch.tensor(labels).to(device)
+#
+#         outputs = model(images)
+#         loss = criterion(outputs, labels)
+#
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+#
+#         running_loss += loss.item()
+#
+#     avg_loss = running_loss / len(dataloader)
+#     print(f'Epoch [{epoch + 1}/{20}], Loss: {avg_loss:.4f}')
+#     losses.append(avg_loss)
+
+with open('reward_B32_0001_policy.json', 'w') as f:
+    json.dump(total_rewards, f)
+f.close()
+
+with open('loss_B32_0001_policy.json', 'w') as f:
+    json.dump(losses, f)
+f.close()
